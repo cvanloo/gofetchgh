@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"io"
 	"strings"
+	"encoding/base64"
 
 	"github.com/cvanloo/parsenv"
 	_ "github.com/joho/godotenv/autoload"
@@ -194,7 +195,10 @@ func routeUpdate(env Env, allowedIPs Whitelist) HandlerWithError {
 		if !strings.HasPrefix(signature, signaturePrefix) {
 			return BadRequest{fmt.Errorf("malformed hmac sha256 signature")}
 		}
-		messageMac := []byte(strings.TrimPrefix(signature, signaturePrefix))
+		messageMac, err := base64.URLEncoding.DecodeString(strings.TrimPrefix(signature, signaturePrefix))
+		if err != nil {
+			return BadRequest{fmt.Errorf("encoding invalid for hmac sha256 signature")}
+		}
 		mac := hmac.New(sha256.New, []byte(env.ClientSecret))
 		mac.Write(fullBody)
 		expectedMac := mac.Sum(nil)

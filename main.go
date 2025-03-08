@@ -10,6 +10,9 @@ import (
 	"encoding/json"
 	"time"
 	"regexp"
+	"crypto/hmac"
+	"crypto/sha256"
+	"io"
 
 	"github.com/cvanloo/parsenv"
 	_ "github.com/joho/godotenv/autoload"
@@ -173,8 +176,18 @@ func routeUpdate(env Env, allowedIPs Whitelist) HandlerWithError {
 		if !allowedIPs.Contains(clientIP) {
 			return Forbidden{}
 		}
-		secret := r.FormValue("CLIENT_CREDENTIAL") // @todo: in form?
-		if secret != env.ClientSecret {
+		fullBody, err := io.ReadAll(r.Body)
+		if err != nil {
+			return err
+		}
+		messageMac := r.Header.Get("X-Hub-Signature-256")
+		if messageMac == "" {
+			return BadRequest{fmt.Errorf("missing hmac sha256 signature")}
+		}
+		mac := hmac.New(sha256.New, []byte(env.ClientSecret))
+		mac.Write(fullBody)
+		expectedMac := mac.Sum(nil)
+		if !hmac.Equal([]byte(messageMac), expectedMac) {
 			return Forbidden{}
 		}
 		cmd := exec.Command(env.BuildScriptPath)

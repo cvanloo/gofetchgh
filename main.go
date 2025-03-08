@@ -13,6 +13,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"io"
+	"strings"
 
 	"github.com/cvanloo/parsenv"
 	_ "github.com/joho/godotenv/autoload"
@@ -178,20 +179,27 @@ func routeUpdate(env Env, allowedIPs Whitelist) HandlerWithError {
 			return fmt.Errorf("invalid ip: %s", clientIPString)
 		}
 		if !allowedIPs.Contains(clientIP) {
+			log.Println("forbidden: remoteaddr")
 			return Forbidden{}
 		}
 		fullBody, err := io.ReadAll(r.Body)
 		if err != nil {
 			return err
 		}
-		messageMac := r.Header.Get("X-Hub-Signature-256")
-		if messageMac == "" {
+		signature := r.Header.Get("X-Hub-Signature-256")
+		if signature == "" {
 			return BadRequest{fmt.Errorf("missing hmac sha256 signature")}
 		}
+		signaturePrefix := "sha256="
+		if !strings.HasPrefix(signature, signaturePrefix) {
+			return BadRequest{fmt.Errorf("malformed hmac sha256 signature")}
+		}
+		messageMac := []byte(strings.TrimPrefix(signature, signaturePrefix))
 		mac := hmac.New(sha256.New, []byte(env.ClientSecret))
 		mac.Write(fullBody)
 		expectedMac := mac.Sum(nil)
 		if !hmac.Equal([]byte(messageMac), expectedMac) {
+			log.Println("forbidden: hmac")
 			return Forbidden{}
 		}
 		cmd := exec.Command(env.BuildScriptPath)

@@ -165,6 +165,7 @@ var remoteAddrRegex = regexp.MustCompile("(\\[([A-Fa-f0-9:]*)\\]|[^:]*):\\d*")
 func routeUpdate(env Env, allowedIPs Whitelist) HandlerWithError {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		addrMatches := remoteAddrRegex.FindStringSubmatch(r.RemoteAddr)
+		log.Printf("%#v", addrMatches)
 		if len(addrMatches) != 2 && len(addrMatches) != 3 {
 			return fmt.Errorf("regex match failed to extract ip address: %#v", addrMatches)
 		}

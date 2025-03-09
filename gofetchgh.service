@@ -1,0 +1,17 @@
+[Unit]
+Description=Provides an endpoint for GitHub web hooks to trigger a rebuild.
+Wants=network-online.target
+After=network.target network-online.target
+
+[Service]
+ExecStart=/opt/gofetchgh
+Restart=on-failure
+User=gofetchgh
+Group=gofetchgh
+Type=simple
+DevicePolicy=closed
+NoNewPrivileges=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ProtectSystem=strict

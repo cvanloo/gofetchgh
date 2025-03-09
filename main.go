@@ -71,6 +71,8 @@ func (b *BuildStatus) RunCommand(cmdline string) {
 	b.Cancel = cancel
 	b.UpdatedAt = time.Now()
 	b.Reason = ReasonRunning
+	b.CmdOut = []byte{}
+	b.CmdErr = nil
 	go func() {
 		out, err := cmd.CombinedOutput()
 		if errors.Is(err, context.Canceled) { // build is only canceled when a new build is invoked

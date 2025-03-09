@@ -280,7 +280,7 @@ func routeStatus(env Env, buildStatus *BuildStatus) HandlerWithError {
 			Status:      string(buildStatus.Reason),
 			UpdatedTime: buildStatus.UpdatedAt,
 			Out:         string(buildStatus.CmdOut),
-			Err:         buildStatus.CmdErr.Error(),
+			Err:         fmt.Sprintf("%v", buildStatus.CmdErr),
 		}
 		return json.NewEncoder(w).Encode(statusResponse)
 	}

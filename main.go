@@ -282,6 +282,8 @@ func routeStatus(env Env, buildStatus *BuildStatus) HandlerWithError {
 			Out:         string(buildStatus.CmdOut),
 			Err:         fmt.Sprintf("%v", buildStatus.CmdErr),
 		}
+		h := w.Header()
+		h.Set("Content-Type", "application/json")
 		return json.NewEncoder(w).Encode(statusResponse)
 	}
 }

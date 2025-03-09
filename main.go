@@ -1,20 +1,22 @@
 package main
 
 import (
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
 	"os/exec"
-	"context"
-	"encoding/json"
-	"time"
 	"regexp"
-	"crypto/hmac"
-	"crypto/sha256"
-	"io"
 	"strings"
-	"encoding/hex"
+	"sync"
+	"time"
 
 	"github.com/cvanloo/parsenv"
 	_ "github.com/joho/godotenv/autoload"
@@ -22,25 +24,74 @@ import (
 
 type (
 	HandlerWithError func(http.ResponseWriter, *http.Request) error
-	ErrorResponder interface {
+	ErrorResponder   interface {
 		RespondError(w http.ResponseWriter, r *http.Request) (wasHandled bool)
 	}
 	BadRequest struct {
 		Inner error
 	}
-	Forbidden struct{}
+	Forbidden        struct{}
 	ErrorBuildScript struct {
 		Inner error
 	}
 	Env struct {
-		BindAddress string     `cfg:"default=:8080"`
-		ClientSecret string    `cfg:"required"`
+		BindAddress     string `cfg:"default=:8080"`
+		ClientSecret    string `cfg:"required"`
 		BuildScriptPath string `cfg:"required"`
 	}
 	Whitelist struct {
 		allowedSubnets []*net.IPNet
 	}
+	BuildStatus struct {
+		sync.RWMutex
+		Cancel    context.CancelFunc
+		CmdOut    []byte
+		CmdErr    error
+		UpdatedAt time.Time
+		Reason    CompletedReason
+	}
+	CompletedReason string
 )
+
+var (
+	ReasonRunning   CompletedReason = "Build Currently Running"
+	ReasonDeadline  CompletedReason = "Build Deadline Exceeded"
+	ReasonFailed    CompletedReason = "Build Failed"
+	ReasonCompleted CompletedReason = "Build Completed"
+)
+
+func (b *BuildStatus) RunCommand(cmdline string) {
+	b.Lock()
+	defer b.Unlock()
+	if b.Cancel != nil {
+		b.Cancel()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	cmd := exec.CommandContext(ctx, cmdline)
+	b.Cancel = cancel
+	b.UpdatedAt = time.Now()
+	b.Reason = ReasonRunning
+	go func() {
+		out, err := cmd.CombinedOutput()
+		if errors.Is(err, context.Canceled) { // build is only canceled when a new build is invoked
+			log.Printf("build cancelled: %v, log output: %s", err, out)
+			return
+		}
+		b.Lock()
+		b.Cancel()
+		b.UpdatedAt = time.Now()
+		if err == nil {
+			b.Reason = ReasonCompleted
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			b.Reason = ReasonDeadline
+		} else {
+			b.Reason = ReasonFailed
+		}
+		b.CmdOut = out
+		b.CmdErr = err
+		b.Unlock()
+	}()
+}
 
 func retrieveGitHubWhitelist(ctx context.Context) (w Whitelist, err error) {
 	githubURI := "https://api.github.com/meta"
@@ -148,9 +199,11 @@ func main() {
 		}
 		whitelist.allowedSubnets = append(whitelist.allowedSubnets, localhost4, localhost6)
 	}
+	buildStatus := &BuildStatus{}
 	mux := &http.ServeMux{}
 	mux.Handle("GET /pub", HandlerWithError(serveUpdateInfo))
-	mux.Handle("POST /pub", routeUpdate(env, whitelist))
+	mux.Handle("POST /pub", routeUpdate(env, whitelist, buildStatus))
+	mux.Handle("GET /status", routeStatus(env, buildStatus))
 	if err := http.ListenAndServe(env.BindAddress, mux); err != nil {
 		panic(err)
 	}
@@ -164,7 +217,7 @@ func serveUpdateInfo(w http.ResponseWriter, r *http.Request) error {
 
 var remoteAddrRegex = regexp.MustCompile("(\\[([A-Fa-f0-9:]*)\\]|[^:]*):\\d*")
 
-func routeUpdate(env Env, allowedIPs Whitelist) HandlerWithError {
+func routeUpdate(env Env, allowedIPs Whitelist, buildStatus *BuildStatus) HandlerWithError {
 	return func(w http.ResponseWriter, r *http.Request) error {
 		addrMatches := remoteAddrRegex.FindStringSubmatch(r.RemoteAddr)
 		log.Printf("%#v", addrMatches)
@@ -206,13 +259,29 @@ func routeUpdate(env Env, allowedIPs Whitelist) HandlerWithError {
 			log.Println("forbidden: hmac")
 			return Forbidden{}
 		}
-		cmd := exec.Command(env.BuildScriptPath)
-		out, err := cmd.CombinedOutput()
-		log.Printf("build script exited with: %v, log output: %s", err, out)
-		if err != nil {
-			return ErrorBuildScript{err}
-		}
-		w.WriteHeader(http.StatusOK)
+		buildStatus.RunCommand(env.BuildScriptPath)
+		h := w.Header()
+		h.Set("Location", "/status")
+		w.WriteHeader(http.StatusCreated)
 		return nil
+	}
+}
+
+func routeStatus(env Env, buildStatus *BuildStatus) HandlerWithError {
+	return func(w http.ResponseWriter, r *http.Request) error {
+		buildStatus.RLock()
+		defer buildStatus.RUnlock()
+		statusResponse := struct {
+			Status      string
+			UpdatedTime time.Time
+			Out         string
+			Err         string
+		}{
+			Status:      string(buildStatus.Reason),
+			UpdatedTime: buildStatus.UpdatedAt,
+			Out:         string(buildStatus.CmdOut),
+			Err:         buildStatus.CmdErr.Error(),
+		}
+		return json.NewEncoder(w).Encode(statusResponse)
 	}
 }
